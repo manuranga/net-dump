@@ -6,10 +6,10 @@ HTTP(S) reverse proxy that logs every request/response to files. This will help 
 
 ```bash
 npm install
-node proxy.js <config.json>
+node net-dump.js <config.json>
 ```
 
-Example: `node proxy.js config-icp.json`
+Example: `node net-dump.js config-icp.json`
 
 ## Config
 

@@ -7,7 +7,7 @@ const httpProxy = require("http-proxy");
 
 const configPath = process.argv[2];
 if (!configPath) {
-  console.error("Usage: node proxy.js <config.json>");
+  console.error("Usage: node net-dump.js <config.json>");
   process.exit(1);
 }
 const configDir = path.dirname(path.resolve(configPath));

@@ -2,7 +2,7 @@
   "name": "net-dump",
   "version": "1.0.0",
   "description": "HTTP(S) proxy that logs requests and responses",
-  "main": "proxy.js",
+  "main": "net-dump.js",
   "dependencies": {
     "http-proxy": "^1.18.1"
   }

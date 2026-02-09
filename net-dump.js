@@ -46,7 +46,10 @@ const config = {
 
 function getLogDetails(requestLogsDir, name, method, statusCode, timestamp) {
   const time = timestamp || new Date().toISOString().slice(11, 23);
-  const base = `${time} ${name} ${method} ${statusCode}`.replace(/[/\\?*:|"]/g, "-");
+  const base = `${time} ${name} ${method} ${statusCode}`.replace(
+    /[/\\?*:|"]/g,
+    "-",
+  );
   let filename = `${base}.txt`;
   let seq = null;
   if (fs.existsSync(path.join(requestLogsDir, filename))) {
@@ -148,7 +151,17 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
       });
 
       proxy.once("error", (err, req, res) => {
-        console.error("[proxy error]", err.code || err.message, err);
+        const errCode = err.code || "";
+        const errMsg = err.message || "";
+        let hint = "";
+        
+        if (errCode === "ECONNRESET" || errCode === "EPIPE" || 
+            errMsg.includes("socket hang up") || errMsg.includes("Empty reply")) {
+          const protocol = mapping.out.https ? "HTTPS" : "HTTP";
+          hint = ` (Backend closed connection. If backend requires HTTPS, set "out.https": true in config)`;
+        }
+        
+        console.error(`[proxy error] ${mapping.name} -> ${mapping.out.host}:${mapping.out.port}`, errCode || errMsg, hint);
         const logDetails = getLogDetails(
           requestLogsDir,
           mapping.name,
@@ -158,7 +171,9 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
         );
         const resLine = "HTTP/1.1 502 Bad Gateway";
         const resHeaders = "";
-        const resBody = Buffer.from(`Bad Gateway: ${err.message || err.code || ""}`);
+        const resBody = Buffer.from(
+          `Bad Gateway: ${errMsg || errCode || ""}${hint}`,
+        );
 
         writeLog(
           requestLogsDir,
@@ -171,7 +186,8 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
           resBody,
         );
 
-        if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" });
+        if (!res.headersSent)
+          res.writeHead(502, { "Content-Type": "text/plain" });
         res.end(resBody);
       });
 

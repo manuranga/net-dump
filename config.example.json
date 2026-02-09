@@ -1,0 +1,26 @@
+{
+  "main_log": "./logs/net-dump.txt",
+  "request_logs": "./logs/requests",
+  "mappings": [
+    {
+      "name": "auth",
+      "in": {
+        "port": 8001,
+        "interface": "0.0.0.0",
+        "ssl": {
+          "key": "./certs/server.key",
+          "cert": "./certs/server.crt"
+        }
+      },
+      "out": {
+        "host": "staging-api.example.com",
+        "port": 443
+      }
+    },
+    {
+      "comment": "Minimal config using defaults",
+      "in": { "port": 8002 },
+      "out": { "port": 3000 }
+    }
+  ]
+}

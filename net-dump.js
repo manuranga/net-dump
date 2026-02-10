@@ -110,6 +110,96 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
     selfHandleResponse: true,
     changeOrigin: true,
   });
+  const pending = new WeakMap();
+
+  proxy.on("proxyRes", (proxyRes, req, res) => {
+    const ctx = pending.get(req);
+    if (!ctx) return;
+    pending.delete(req);
+    const { body, timestamp } = ctx;
+    const resChunks = [];
+    proxyRes.on("data", (c) => resChunks.push(c));
+    proxyRes.on("end", () => {
+      let resBody = Buffer.concat(resChunks);
+      if (mapping.replace?.response) {
+        let resBodyStr = resBody.toString("utf8");
+        for (const r of mapping.replace.response) {
+          resBodyStr = resBodyStr.replaceAll(r.from, r.to);
+        }
+        resBody = Buffer.from(resBodyStr, "utf8");
+      }
+      const logDetails = getLogDetails(
+        requestLogsDir,
+        mapping.name,
+        req.method,
+        req.url.split("?")[0].slice(1),
+        proxyRes.statusCode,
+        timestamp,
+      );
+      const resLine = `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}`;
+      const resHeaders = Object.entries(proxyRes.headers)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\n");
+
+      writeLog(
+        requestLogsDir,
+        mainLogPath,
+        logDetails,
+        req,
+        body,
+        resLine,
+        resHeaders,
+        resBody,
+      );
+
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      res.end(resBody);
+    });
+  });
+
+  proxy.on("error", (err, req, res) => {
+    const ctx = pending.get(req);
+    if (!ctx) return;
+    pending.delete(req);
+    const { body, timestamp } = ctx;
+    const errCode = err.code || "";
+    const errMsg = err.message || "";
+    let hint = "";
+    if (
+      errCode === "ECONNRESET" ||
+      errCode === "EPIPE" ||
+      errMsg.includes("socket hang up") ||
+      errMsg.includes("Empty reply")
+    ) {
+      hint = ` (Backend closed connection. If backend requires HTTPS, set "out.https": true in config)`;
+    }
+    console.error(
+      `[proxy error] ${mapping.name} -> ${mapping.out.host}:${mapping.out.port}`,
+      errCode || errMsg,
+      hint,
+    );
+    const logDetails = getLogDetails(
+      requestLogsDir,
+      mapping.name,
+      req.method,
+      req.url.split("?")[0].slice(1),
+      502,
+      timestamp,
+    );
+    writeLog(
+      requestLogsDir,
+      mainLogPath,
+      logDetails,
+      req,
+      body,
+      "HTTP/1.1 502 Bad Gateway",
+      "",
+      Buffer.from(`Bad Gateway: ${errMsg || errCode || ""}${hint}`),
+    );
+    if (!res.headersSent)
+      res.writeHead(502, { "Content-Type": "text/plain" });
+    res.end(Buffer.from(`Bad Gateway: ${errMsg || errCode || ""}${hint}`));
+  });
 
   return (req, res) => {
     const chunks = [];
@@ -132,98 +222,7 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
       };
       const timestamp = new Date().toISOString().slice(11, 23);
       delete req.headers["accept-encoding"];
-
-      proxy.once("proxyRes", (proxyRes) => {
-        const resChunks = [];
-        proxyRes.on("data", (c) => resChunks.push(c));
-        proxyRes.on("end", () => {
-          let resBody = Buffer.concat(resChunks);
-          if (mapping.replace?.response) {
-            let resBodyStr = resBody.toString("utf8");
-            for (const r of mapping.replace.response) {
-              resBodyStr = resBodyStr.replaceAll(r.from, r.to);
-            }
-            resBody = Buffer.from(resBodyStr, "utf8");
-          }
-          const logDetails = getLogDetails(
-            requestLogsDir,
-            mapping.name,
-            req.method,
-            req.url.split("?")[0].slice(1),
-            proxyRes.statusCode,
-            timestamp,
-          );
-          const resLine = `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}`;
-          const resHeaders = Object.entries(proxyRes.headers)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("\n");
-
-          writeLog(
-            requestLogsDir,
-            mainLogPath,
-            logDetails,
-            req,
-            body,
-            resLine,
-            resHeaders,
-            resBody,
-          );
-
-          res.writeHead(proxyRes.statusCode, proxyRes.headers);
-          res.end(resBody);
-        });
-      });
-
-      proxy.once("error", (err, req, res) => {
-        const errCode = err.code || "";
-        const errMsg = err.message || "";
-        let hint = "";
-
-        if (
-          errCode === "ECONNRESET" ||
-          errCode === "EPIPE" ||
-          errMsg.includes("socket hang up") ||
-          errMsg.includes("Empty reply")
-        ) {
-          const protocol = mapping.out.https ? "HTTPS" : "HTTP";
-          hint = ` (Backend closed connection. If backend requires HTTPS, set "out.https": true in config)`;
-        }
-
-        console.error(
-          `[proxy error] ${mapping.name} -> ${mapping.out.host}:${mapping.out.port}`,
-          errCode || errMsg,
-          hint,
-        );
-        const logDetails = getLogDetails(
-          requestLogsDir,
-          mapping.name,
-          req.method,
-          req.url.split("?")[0].slice(1),
-          502,
-          timestamp,
-        );
-        const resLine = "HTTP/1.1 502 Bad Gateway";
-        const resHeaders = "";
-        const resBody = Buffer.from(
-          `Bad Gateway: ${errMsg || errCode || ""}${hint}`,
-        );
-
-        writeLog(
-          requestLogsDir,
-          mainLogPath,
-          logDetails,
-          req,
-          body,
-          resLine,
-          resHeaders,
-          resBody,
-        );
-
-        if (!res.headersSent)
-          res.writeHead(502, { "Content-Type": "text/plain" });
-        res.end(resBody);
-      });
-
+      pending.set(req, { body, timestamp });
       proxy.web(req, res, { target, buffer: bodyStream });
     });
   };

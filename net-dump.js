@@ -40,16 +40,23 @@ const config = {
         port: outPort,
         https: !!outCfg.https,
       },
+      replace: m.replace || {},
     };
   }),
 };
 
-function getLogDetails(requestLogsDir, name, method, statusCode, timestamp) {
+function getLogDetails(
+  requestLogsDir,
+  name,
+  method,
+  urlPath,
+  statusCode,
+  timestamp,
+) {
   const time = timestamp || new Date().toISOString().slice(11, 23);
-  const base = `${time} ${name} ${method} ${statusCode}`.replace(
-    /[/\\?*:|"]/g,
-    "-",
-  );
+  const base = `${time} ${name} ${method} ${urlPath} ${statusCode}`
+    .replace(/\s/g, "_")
+    .replace(/[/\\?*:|"]/g, "-");
   let filename = `${base}.txt`;
   let seq = null;
   if (fs.existsSync(path.join(requestLogsDir, filename))) {
@@ -61,7 +68,8 @@ function getLogDetails(requestLogsDir, name, method, statusCode, timestamp) {
     )
       seq++;
   }
-  return { filename, timestamp: time, seq };
+  const nameNoExt = seq === null ? base : `${base} ${seq}`;
+  return { filename, nameNoExt, timestamp: time, seq };
 }
 
 function streamFromBuffer(buf) {
@@ -89,6 +97,7 @@ function writeLog(
 
   const detailPath = path.join(requestLogsDir, logDetails.filename);
   fs.writeFileSync(detailPath, log);
+  console.log(logDetails.nameNoExt);
   if (mainLogPath) {
     const mainLine = `${logDetails.filename} ${req.url}\n`;
     fs.appendFileSync(mainLogPath, mainLine);
@@ -106,7 +115,14 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
-      const body = Buffer.concat(chunks);
+      let body = Buffer.concat(chunks);
+      if (mapping.replace?.request) {
+        let bodyStr = body.toString("utf8");
+        for (const r of mapping.replace.request) {
+          bodyStr = bodyStr.replaceAll(r.from, r.to);
+        }
+        body = Buffer.from(bodyStr, "utf8");
+      }
       const bodyStream = streamFromBuffer(body);
       const target = {
         host: mapping.out.host,
@@ -121,11 +137,19 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
         const resChunks = [];
         proxyRes.on("data", (c) => resChunks.push(c));
         proxyRes.on("end", () => {
-          const resBody = Buffer.concat(resChunks);
+          let resBody = Buffer.concat(resChunks);
+          if (mapping.replace?.response) {
+            let resBodyStr = resBody.toString("utf8");
+            for (const r of mapping.replace.response) {
+              resBodyStr = resBodyStr.replaceAll(r.from, r.to);
+            }
+            resBody = Buffer.from(resBodyStr, "utf8");
+          }
           const logDetails = getLogDetails(
             requestLogsDir,
             mapping.name,
             req.method,
+            req.url.split("?")[0].slice(1),
             proxyRes.statusCode,
             timestamp,
           );
@@ -154,18 +178,27 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
         const errCode = err.code || "";
         const errMsg = err.message || "";
         let hint = "";
-        
-        if (errCode === "ECONNRESET" || errCode === "EPIPE" || 
-            errMsg.includes("socket hang up") || errMsg.includes("Empty reply")) {
+
+        if (
+          errCode === "ECONNRESET" ||
+          errCode === "EPIPE" ||
+          errMsg.includes("socket hang up") ||
+          errMsg.includes("Empty reply")
+        ) {
           const protocol = mapping.out.https ? "HTTPS" : "HTTP";
           hint = ` (Backend closed connection. If backend requires HTTPS, set "out.https": true in config)`;
         }
-        
-        console.error(`[proxy error] ${mapping.name} -> ${mapping.out.host}:${mapping.out.port}`, errCode || errMsg, hint);
+
+        console.error(
+          `[proxy error] ${mapping.name} -> ${mapping.out.host}:${mapping.out.port}`,
+          errCode || errMsg,
+          hint,
+        );
         const logDetails = getLogDetails(
           requestLogsDir,
           mapping.name,
           req.method,
+          req.url.split("?")[0].slice(1),
           502,
           timestamp,
         );

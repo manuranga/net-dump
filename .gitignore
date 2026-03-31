@@ -8,8 +8,6 @@ config-icp.json
 net-dump.txt
 
 test-*/
-*.crt
-*.key
 
 .DS_Store
 *.swp

@@ -116,6 +116,7 @@ function createHandler(mapping, requestLogsDir, mainLogPath) {
           bodyStr = bodyStr.replaceAll(r.from, r.to);
         }
         body = Buffer.from(bodyStr, "utf8");
+        req.headers["content-length"] = body.length;
       }
       const bodyStream = streamFromBuffer(body);
       const target = {
@@ -236,6 +237,9 @@ for (const m of config.mappings) {
   const server = m.in.ssl
     ? https.createServer(m.in.ssl, handler)
     : http.createServer(handler);
+  server.on("tlsClientError", (err) => {
+    console.error(`[tls error] ${m.name}`, err.message);
+  });
   const target = `${m.out.host}:${m.out.port}`;
   server.listen(m.in.port, m.in.interface, () => {
     console.log(
